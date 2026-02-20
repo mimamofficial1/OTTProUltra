@@ -1,8 +1,10 @@
-import os
 from motor.motor_asyncio import AsyncIOMotorClient
+from config import MONGO_URL
+import datetime
 
-MONGO_URL = os.getenv("MONGO_URL")
+client = AsyncIOMotorClient(MONGO_URL)
+db = client.OTTBot
 
-mongo = AsyncIOMotorClient(MONGO_URL)
-db = mongo["OTTProUltra"]
-users = db["users"]
+users = db.users
+premium = db.premium
+queue = db.queue
