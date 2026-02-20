@@ -73,9 +73,15 @@ async def handle_links(client, message: Message):
 
     # ---------------- GOOGLE DRIVE ---------------- #
     if "drive.google.com" in url:
-        await add_to_queue(user_id, url)
-        await message.reply("📥 Added to queue (Google Drive).")
+    direct_link = convert_to_direct(url)
+
+    if not direct_link:
+        await message.reply("❌ Invalid Google Drive link.")
         return
+
+    await add_to_queue(user_id, direct_link)
+    await message.reply("📥 Google Drive added to queue.")
+    return
 
     # ---------------- DIRECT DOWNLOAD ---------------- #
     if url.startswith("http"):
