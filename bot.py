@@ -1,150 +1,127 @@
-import os
-import aiohttp
 import asyncio
 from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from config import API_ID, API_HASH, BOT_TOKEN, ADMIN_ID, DAILY_LIMIT
-from database import users
+from pyrogram.types import Message
+
+from config import API_ID, API_HASH, BOT_TOKEN
+from downloader import download_file
+from youtube_meta import get_metadata
+from premium import is_premium
+from forcejoin import force_join
+from admin import admin_commands
+from queue_system import add_to_queue
 
 app = Client(
-    "OTTProUltra",
+    "OTTBot",
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN
 )
 
-
-# ---------------- USER SYSTEM ---------------- #
-
-async def add_user(user_id):
-    if not await users.find_one({"_id": user_id}):
-        await users.insert_one({
-            "_id": user_id,
-            "premium": False,
-            "downloads": 0
-        })
-
-
-async def check_limit(user_id):
-    user = await users.find_one({"_id": user_id})
-    if user["premium"]:
-        return True
-    return user["downloads"] < DAILY_LIMIT
-
-
-async def increase_download(user_id):
-    await users.update_one(
-        {"_id": user_id},
-        {"$inc": {"downloads": 1}}
-    )
-
-
 # ---------------- START ---------------- #
 
 @app.on_message(filters.command("start"))
-async def start(client, message):
-    await add_user(message.from_user.id)
-
-    buttons = InlineKeyboardMarkup([
-        [InlineKeyboardButton("💎 Buy Premium", callback_data="buy")]
-    ])
-
+async def start(client, message: Message):
     await message.reply_text(
-        "👋 Welcome to OTT Pro Ultra\n\n"
-        f"Free users daily limit: {DAILY_LIMIT}\n"
-        "Send direct video link (non-DRM).",
-        reply_markup=buttons
+        "🔥 Premium Downloader Bot Ready\n\n"
+        "Send me:\n"
+        "• Direct File Link\n"
+        "• Google Drive Link\n"
+        "• YouTube Link (Metadata Only)"
     )
 
+# ---------------- ADMIN ---------------- #
 
-@app.on_callback_query(filters.regex("buy"))
-async def buy(client, query):
-    await query.message.edit(
-        "💎 Contact admin to buy premium access."
-    )
+@app.on_message(filters.command(["addpremium", "removepremium"]))
+async def admin_panel(client, message: Message):
+    await admin_commands(client, message)
 
-
-# ---------------- DOWNLOAD SYSTEM ---------------- #
+# ---------------- MAIN HANDLER ---------------- #
 
 @app.on_message(filters.text & ~filters.command(["start", "addpremium", "removepremium"]))
-async def download(client, message):
+async def handle_links(client, message: Message):
+
     user_id = message.from_user.id
-    await add_user(user_id)
-
-    if not await check_limit(user_id):
-        return await message.reply_text("❌ Daily limit reached. Buy Premium.")
-
     url = message.text.strip()
 
-    if not url.startswith("http"):
-        return await message.reply_text("❌ Send valid direct link.")
+    # 🔒 Force Join Check
+    if not await force_join(client, message):
+        return
 
-    status = await message.reply_text("🔄 Downloading...")
+    # 👑 Premium Check (optional logic)
+    premium_user = await is_premium(user_id)
 
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as resp:
-                if resp.status != 200:
-                    return await status.edit("❌ Invalid or blocked link.")
+    # ---------------- YOUTUBE METADATA ---------------- #
+    if "youtube.com" in url or "youtu.be" in url:
+        try:
+            status = await message.reply("🔎 Fetching YouTube info...")
 
-                filename = "video.mp4"
-                with open(filename, "wb") as f:
-                    async for chunk in resp.content.iter_chunked(1024):
-                        f.write(chunk)
+            data = await get_metadata(url)
 
-        await increase_download(user_id)
+            await message.reply_photo(
+                data["thumb"],
+                caption=f"🎬 {data['title']}\n"
+                        f"⏱ {data['duration']} sec\n"
+                        f"👁 {data['views']} views"
+            )
 
-        await status.edit("📤 Uploading...")
-        await message.reply_video(filename, caption="🎬 Uploaded by OTTProUltra")
+            await status.delete()
 
-        os.remove(filename)
-        await status.delete()
+        except Exception:
+            await message.reply("❌ Failed to fetch YouTube info.")
+        return
 
-    except Exception as e:
-        await status.edit("❌ Failed to download.")
+    # ---------------- GOOGLE DRIVE ---------------- #
+    if "drive.google.com" in url:
+        await add_to_queue(user_id, url)
+        await message.reply("📥 Added to queue (Google Drive).")
+        return
 
+    # ---------------- DIRECT DOWNLOAD ---------------- #
+    if url.startswith("http"):
+        await add_to_queue(user_id, url)
+        await message.reply("📥 Added to queue (Direct Link).")
+        return
 
-# ---------------- ADMIN COMMANDS ---------------- #
-
-@app.on_message(filters.command("addpremium") & filters.user(ADMIN_ID))
-async def add_premium(client, message):
-    try:
-        user_id = int(message.command[1])
-    except:
-        return await message.reply_text("Usage:\n/addpremium user_id")
-
-    user = await users.find_one({"_id": user_id})
-
-    if not user:
-        await users.insert_one({
-            "_id": user_id,
-            "premium": True,
-            "downloads": 0
-        })
-    else:
-        await users.update_one(
-            {"_id": user_id},
-            {"$set": {"premium": True}}
-        )
-
-    await message.reply_text(f"✅ User {user_id} is now Premium!")
+    await message.reply("❌ Invalid link sent.")
 
 
-@app.on_message(filters.command("removepremium") & filters.user(ADMIN_ID))
-async def remove_premium(client, message):
-    try:
-        user_id = int(message.command[1])
-    except:
-        return await message.reply_text("Usage:\n/removepremium user_id")
+# ---------------- QUEUE WORKER ---------------- #
 
-    await users.update_one(
-        {"_id": user_id},
-        {"$set": {"premium": False}}
-    )
+from queue_system import get_next
 
-    await message.reply_text(f"❌ User {user_id} premium removed.")
+async def queue_worker():
+    while True:
+        data = await get_next()
+        if data:
+            user_id = data["user_id"]
+            url = data["url"]
+
+            try:
+                user = await app.get_users(user_id)
+                msg = await app.send_message(user_id, "⬇️ Downloading...")
+
+                file_path = await download_file(url, msg)
+
+                await app.send_video(
+                    user_id,
+                    file_path,
+                    caption="🎬 Uploaded Successfully"
+                )
+
+            except Exception as e:
+                await app.send_message(user_id, "❌ Download Failed.")
+
+        await asyncio.sleep(3)
 
 
 # ---------------- RUN ---------------- #
+
+async def main():
+    await app.start()
+    asyncio.create_task(queue_worker())
+    print("🚀 Bot Started")
+    await idle()
+
+from pyrogram import idle
 
 app.run()
