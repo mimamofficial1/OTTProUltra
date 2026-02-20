@@ -75,7 +75,9 @@ async def download(client, message):
         return await message.reply_text("❌ Daily limit reached. Buy Premium.")
 
     url = message.text.strip()
-    filename = "video.mp4"
+
+    if not url.startswith("http"):
+        return await message.reply_text("❌ Send valid direct link.")
 
     status = await message.reply_text("🔄 Downloading...")
 
@@ -85,6 +87,7 @@ async def download(client, message):
                 if resp.status != 200:
                     return await status.edit("❌ Invalid or blocked link.")
 
+                filename = "video.mp4"
                 with open(filename, "wb") as f:
                     async for chunk in resp.content.iter_chunked(1024):
                         f.write(chunk)
@@ -92,16 +95,13 @@ async def download(client, message):
         await increase_download(user_id)
 
         await status.edit("📤 Uploading...")
-        await message.reply_video(
-            filename,
-            caption="🎬 Uploaded by OTTProUltra"
-        )
+        await message.reply_video(filename, caption="🎬 Uploaded by OTTProUltra")
 
         os.remove(filename)
         await status.delete()
 
     except Exception as e:
-        await status.edit(f"❌ Error: {e}")
+        await status.edit("❌ Failed to download.")
 
 
 # ---------------- ADMIN COMMANDS ---------------- #
