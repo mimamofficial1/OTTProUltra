@@ -5,6 +5,7 @@ from pyrogram.types import Message
 from config import API_ID, API_HASH, BOT_TOKEN
 from downloader import download_file
 from youtube_meta import get_metadata
+from gdrive import convert_to_direct
 from premium import is_premium
 from forcejoin import force_join
 from admin import admin_commands
